@@ -12,9 +12,12 @@ import logging
 
 import six
 from celery import Celery
+from celery.backends.redis import RedisBackend
+from threading import Thread
 from prometheus_client import (
     start_http_server,
     Histogram,
+    Gauge,
     ProcessCollector,
     PROCESS_COLLECTOR,
     REGISTRY
@@ -57,11 +60,15 @@ parser.add_argument(
 
 task_queuetime_seconds = None
 task_runtime_seconds = None
+queue_length = None
+queues = None
 
 
-def setup_metrics(prefix):
+def setup_metrics(prefix, app):
     global task_queuetime_seconds
     global task_runtime_seconds
+    global queue_length
+    global queues
     task_queuetime_seconds = Histogram(
         '%s_task_queuetime_seconds' % prefix,
         'number of seconds spent in queue for celery tasks',
@@ -84,6 +91,31 @@ def setup_metrics(prefix):
     # use custom process collector so we have it namespaced properly
     REGISTRY.unregister(PROCESS_COLLECTOR)
     ProcessCollector(prefix)
+
+    if isinstance(app.backend, RedisBackend):
+        # queues must be explicitly configured in config
+        queues_conf = app.conf.get('CELERY_QUEUES')
+        if not queues_conf:
+            return
+        queues = [queue.name for queue in queues_conf]
+        if not queues:
+            return
+
+        queue_length = Gauge(
+            '%s_queue_length' % prefix,
+            'length of Celery queues',
+            ['queue']
+        )
+
+
+def check_queue_lengths(app):
+    while True:
+        pipe = app.backend.client.pipeline(transaction=False)
+        for queue in queues:
+            pipe.llen(queue)
+        for result, queue in zip(pipe.execute(), queues):
+            queue_length.labels(queue).set(result)
+        time.sleep(45)
 
 
 def celery_monitor(app):
@@ -133,12 +165,14 @@ def celery_monitor(app):
 def run():
     args = parser.parse_args()
 
-    setup_metrics(args.prefix)
-
     app = Celery()
     app.config_from_object(args.config)
 
+    setup_metrics(args.prefix, app)
+
     start_http_server(args.port, args.host)
+
+    Thread(target=check_queue_lengths, args=(app,)).start()
 
     celery_monitor(app)
 
