@@ -12,7 +12,13 @@ import logging
 
 import six
 from celery import Celery
-from prometheus_client import start_http_server, Histogram
+from prometheus_client import (
+    start_http_server,
+    Histogram,
+    ProcessCollector,
+    PROCESS_COLLECTOR,
+    REGISTRY
+)
 
 
 parser = argparse.ArgumentParser(description='Listens to Celery events and exports them to Prometheus')
@@ -74,6 +80,10 @@ def setup_metrics(prefix):
             .75, 1.0, 2.5, 5.0, 7.5, 10.0, 100.0, float('inf')
         )
     )
+
+    # use custom process collector so we have it namespaced properly
+    REGISTRY.unregister(PROCESS_COLLECTOR)
+    ProcessCollector(prefix)
 
 
 def celery_monitor(app):
