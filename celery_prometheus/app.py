@@ -22,7 +22,7 @@ parser.add_argument(
     dest='config',
     action='store',
     type=six.text_type,
-    help='Fully-qualfiied config module name'
+    help='Fully-qualified config module name'
 )
 parser.add_argument(
     '--host',
@@ -40,25 +40,40 @@ parser.add_argument(
     default=9897,
     help='The port to listen on'
 )
+parser.add_argument(
+    '--prefix',
+    dest='prefix',
+    action='store',
+    type=six.text_type,
+    default='celery',
+    help='Prefix for exported metrics'
+)
 
-task_queuetime_seconds = Histogram(
-    'celery_task_queuetime_seconds',
-    'number of seconds spent in queue for celery tasks',
-    ['task_name', 'exchange'],
-    buckets=(
-        .005, .01, .025, .05, .075, .1, .25, .5,
-        .75, 1.0, 2.5, 5.0, 7.5, 10.0, 100.0, float('inf')
+task_queuetime_seconds = None
+task_runtime_seconds = None
+
+
+def setup_metrics(prefix):
+    global task_queuetime_seconds
+    global task_runtime_seconds
+    task_queuetime_seconds = Histogram(
+        '%s_task_queuetime_seconds' % prefix,
+        'number of seconds spent in queue for celery tasks',
+        ['task_name', 'exchange'],
+        buckets=(
+            .005, .01, .025, .05, .075, .1, .25, .5,
+            .75, 1.0, 2.5, 5.0, 7.5, 10.0, 100.0, float('inf')
+        )
     )
-)
-task_runtime_seconds = Histogram(
-    'celery_task_runtime_seconds',
-    'number of seconds spent executing celery tasks',
-    ['task_name', 'state', 'exchange'],
-    buckets=(
-        .005, .01, .025, .05, .075, .1, .25, .5,
-        .75, 1.0, 2.5, 5.0, 7.5, 10.0, 100.0, float('inf')
+    task_runtime_seconds = Histogram(
+        '%s_task_runtime_seconds' % prefix,
+        'number of seconds spent executing celery tasks',
+        ['task_name', 'state', 'exchange'],
+        buckets=(
+            .005, .01, .025, .05, .075, .1, .25, .5,
+            .75, 1.0, 2.5, 5.0, 7.5, 10.0, 100.0, float('inf')
+        )
     )
-)
 
 
 def celery_monitor(app):
@@ -107,6 +122,8 @@ def celery_monitor(app):
 
 def run():
     args = parser.parse_args()
+
+    setup_metrics(args.prefix)
 
     app = Celery()
     app.config_from_object(args.config)
