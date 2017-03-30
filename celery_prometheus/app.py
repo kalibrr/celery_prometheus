@@ -132,15 +132,34 @@ def celery_monitor(app):
     def handle_retried_task(event, task):
         task_runtime_seconds.labels(task.name, 'retried', task.exchange).observe(task.runtime)
 
-    with app.connection() as connection:
-        recv = app.events.Receiver(connection, handlers={
-            'task-started': handle_started_task,
-            'task-succeeded': handle_succeeded_task,
-            'task-failed': handle_failed_task,
-            'task-retried': handle_retried_task,
-            '*': state.event
-        })
-        recv.capture(limit=None, timeout=None, wakeup=True)
+    try_interval = 1
+    while True:
+        try:
+            try_interval *= 2
+
+            with app.connection() as connection:
+                recv = app.events.Receiver(connection, handlers={
+                    'task-started': handle_started_task,
+                    'task-succeeded': handle_succeeded_task,
+                    'task-failed': handle_failed_task,
+                    'task-retried': handle_retried_task,
+                    '*': state.event
+                })
+                try_interval = 1
+                recv.capture(limit=None, timeout=None, wakeup=True)
+
+        except (KeyboardInterrupt, SystemExit):
+            try:
+                import _thread as thread
+            except ImportError:
+                import thread
+            thread.interrupt_main()
+        except Exception as e:
+            logging.error("Failed to capture events: '%s', "
+                          "trying again in %s seconds.",
+                          e, try_interval)
+            logging.debug(e, exc_info=True)
+            time.sleep(try_interval)
 
 
 def run():
