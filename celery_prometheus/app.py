@@ -108,8 +108,8 @@ def check_queue_lengths(app):
         time.sleep(45)
 
 def check_queue_rss():
+    pattern = '\[celeryd: (.*@.*):MainProcess\]'
     while True:
-        pattern = '\[celeryd: (.*@.*):MainProcess\]'
         output = []
         ps_out = subprocess.check_output(['ps', '-eo', 'pid,rss,fname,command'])
         for line in ps_out.split('\n'):
