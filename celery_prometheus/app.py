@@ -11,6 +11,8 @@ import time
 import logging
 
 import six
+import re
+import subprocess
 from celery import Celery
 from celery.backends.redis import RedisBackend
 from threading import Thread
@@ -66,11 +68,13 @@ task_runtime_seconds = Histogram(
     )
 )
 queue_length = None
+queue_rss = None
 queues = None
 
 
 def setup_metrics(app):
     global queue_length
+    global queue_rss
     global queues
 
     if isinstance(app.backend, RedisBackend):
@@ -88,6 +92,11 @@ def setup_metrics(app):
             ['queue']
         )
 
+        queue_rss = Gauge(
+            'celery_queue_rss_megabytes',
+            'RSS of celery queue',
+            ['queue']
+        )
 
 def check_queue_lengths(app):
     while True:
@@ -98,6 +107,26 @@ def check_queue_lengths(app):
             queue_length.labels(queue).set(result)
         time.sleep(45)
 
+def check_queue_rss():
+    while True:
+        pattern = '\[celeryd: (.*@.*):MainProcess\]'
+        output = []
+        ps_out = subprocess.check_output(['ps', '-eo', 'pid,rss,fname,command'])
+        for line in ps_out.split('\n'):
+            token = re.findall(pattern, line)
+            if token:
+                values = line.strip().split(' ')
+                rss = int(values[1]) / 1000.0
+                name = token[0].split('@')[0]
+                output.append(
+                    {
+                        'name': name,
+                        'rss': rss,
+                    }
+                )
+        for item in output:
+            queue_rss.labels(item[queue]).set(item[rss])
+        time.sleep(45)
 
 def celery_monitor(app):
     state = app.events.State()
@@ -174,6 +203,9 @@ def run():
 
     if queue_length is not None:
         Thread(target=check_queue_lengths, args=(app,)).start()
+
+    if queue_rss is not None:
+        Thread(target=check_queue_rss).start()
 
     celery_monitor(app)
 
