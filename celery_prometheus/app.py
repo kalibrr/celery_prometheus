@@ -125,7 +125,7 @@ def check_queue_rss():
                     }
                 )
         for item in output:
-            queue_rss.labels(item[queue]).set(item[rss])
+            queue_rss.labels(item['name']).set(item['rss'])
         time.sleep(45)
 
 def celery_monitor(app):
