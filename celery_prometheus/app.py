@@ -9,7 +9,7 @@ import argparse
 from functools import wraps
 import time
 import logging
-
+import psutil
 import six
 import re
 import subprocess
@@ -110,20 +110,18 @@ def check_queue_lengths(app):
 def check_queue_rss():
     pattern = '\[celeryd: (.*@.*):MainProcess\]'
     while True:
-        output = []
-        ps_out = subprocess.check_output(['ps', '-eo', 'pid,rss,fname,command'])
-        for line in ps_out.split('\n'):
-            token = re.findall(pattern, line)
-            if token:
-                values = line.strip().split(' ')
-                rss = int(values[1]) / 1000.0
-                name = token[0].split('@')[0]
-                output.append(
-                    {
-                        'name': name,
-                        'rss': rss,
-                    }
-                )
+    output = []
+        for proc in psutil.process_iter():
+            cmd = proc.cmdline()
+            if len(cmd):
+                token = re.findall(pattern, cmd[0])
+                if token:
+                    output.append(
+                        {
+                            'name': token[0].split('@')[0],
+                            'rss': proc.memory_info().rss / 1000000.0
+                        }
+                    )
         for item in output:
             queue_rss.labels(item['name']).set(item['rss'])
         time.sleep(45)
