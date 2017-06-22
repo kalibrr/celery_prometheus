@@ -110,7 +110,7 @@ def check_queue_lengths(app):
 def check_queue_rss():
     pattern = '\[celeryd: (.*@.*):MainProcess\]'
     while True:
-    output = []
+        output = []
         for proc in psutil.process_iter():
             cmd = proc.cmdline()
             if len(cmd):
