@@ -6,32 +6,25 @@ from __future__ import unicode_literals
 from __future__ import division
 
 import argparse
+import os
 from functools import wraps
 import time
 import logging
 import psutil
 import six
 import re
-import subprocess
 from celery import Celery
-from celery.backends.redis import RedisBackend
 from threading import Thread
 from prometheus_client import (
     start_http_server,
     Histogram,
     Gauge,
+    Counter
 )
 
 
 parser = argparse.ArgumentParser(description='Listens to Celery events and exports them to Prometheus')
 
-parser.add_argument(
-    '--config', '-c',
-    dest='config',
-    action='store',
-    type=six.text_type,
-    help='Fully-qualified config module name'
-)
 parser.add_argument(
     '--host',
     dest='host',
@@ -48,7 +41,44 @@ parser.add_argument(
     default=9897,
     help='The port to listen on'
 )
+parser.add_argument(
+    '--monitor-memory',
+    dest='monitor_memory',
+    action='store_true',
+    default=False,
+    help='whether to monitor memory (RSS) of celery workers'
+)
+parser.add_argument(
+    '--broker',
+    dest='broker',
+    action='store',
+    type=six.text_type,
+    help='URL to Celery broker'
+)
+parser.add_argument(
+    '--tz', dest='tz',
+    help="Timezone used by the celery app."
+)
+parser.add_argument(
+    '--queue',
+    dest='queues',
+    action='append',
+    help='Celery queues to check length for'
+)
 
+# We have these counters because sometimes we might not
+# be able to find out the queue time or runtime of a task,
+# so we can't mark an observation in the histogram
+task_submissions = Counter(
+    'celery_task_submissions',
+    'number of times a task has been submitted',
+    ['task_name', 'exchange'],
+)
+task_completions = Counter(
+    'celery_task_completions',
+    'number of times a task has been completed',
+    ['task_name', 'state', 'exchange'],
+)
 task_queuetime_seconds = Histogram(
     'celery_task_queuetime_seconds',
     'number of seconds spent in queue for celery tasks',
@@ -69,43 +99,37 @@ task_runtime_seconds = Histogram(
 )
 queue_length = None
 queue_rss = None
-queues = None
 
 
-def setup_metrics(app):
+def setup_metrics(app, monitor_memory=False, queues=None):
     global queue_length
     global queue_rss
-    global queues
-
-    if isinstance(app.backend, RedisBackend):
-        # queues must be explicitly configured in config
-        queues_conf = app.conf.get('CELERY_QUEUES')
-        if not queues_conf:
-            return
-        queues = [queue.name for queue in queues_conf]
-        if not queues:
-            return
-
+    if queues and app.conf.BROKER_URL.startswith('redis:'):
         queue_length = Gauge(
             'celery_queue_length',
             'length of Celery queues',
             ['queue']
         )
 
+    if monitor_memory:
         queue_rss = Gauge(
             'celery_queue_rss_megabytes',
             'RSS of celery queue',
             ['queue']
         )
 
-def check_queue_lengths(app):
+
+def check_queue_lengths(app, queues):
     while True:
-        pipe = app.backend.client.pipeline(transaction=False)
+        logging.error('Setting queue lengths for %s' % queues)
+        pipe = app.broker_connection().channel().client.pipeline(transaction=False)
         for queue in queues:
             pipe.llen(queue)
         for result, queue in zip(pipe.execute(), queues):
+            logging.error('Setting q length: %s - %s' % (queue, result))
             queue_length.labels(queue).set(result)
         time.sleep(45)
+
 
 def check_queue_rss():
     pattern = '\[celeryd: (.*@.*):MainProcess\]'
@@ -126,6 +150,7 @@ def check_queue_rss():
             queue_rss.labels(item['name']).set(item['rss'])
         time.sleep(45)
 
+
 def celery_monitor(app):
     state = app.events.State()
 
@@ -134,30 +159,48 @@ def celery_monitor(app):
         def wrapper(event):
             state.event(event)
             task = state.tasks.get(event['uuid'])
-            if task is None:
-                # can't do anything with this
-                logging.warning('task for event %s is missing' % event)
-                return
+            logging.error('Received a task: %s %s' % (event, task))
             return fn(event, task)
         return wrapper
 
     @task_handler
     def handle_started_task(event, task):
-        if task.sent is not None:
+        if task is not None and task.sent is not None:
             queue_time = time.time() - task.sent
             task_queuetime_seconds.labels(task.name, task.exchange).observe(queue_time)
+            task_submissions.labels(task.name, task.exchange).inc()
+        else:
+            task_submissions.labels('unknown', 'unknown').inc()
 
     @task_handler
     def handle_succeeded_task(event, task):
-        task_runtime_seconds.labels(task.name, 'succeeded', task.exchange).observe(task.runtime)
+        if task is not None:
+            logging.debug('Succeeded a task: %s %s %s', task.name, task.exchange, task.runtime)
+            task_runtime_seconds.labels(task.name, 'succeeded', task.exchange).observe(task.runtime)
+            task_completions.labels(task.name, 'succeeded', task.exchange).inc()
+        else:
+            logging.debug('Could not track a succeeded task')
+            task_completions.labels('unknown', 'succeeded', 'unknown').inc()
 
     @task_handler
     def handle_failed_task(event, task):
-        task_runtime_seconds.labels(task.name, 'failed', task.exchange).observe(task.runtime)
+        if task is not None:
+            logging.debug('Failed a task: %s %s %s', task.name, task.exchange, task.runtime)
+            task_runtime_seconds.labels(task.name, 'failed', task.exchange).observe(task.runtime)
+            task_completions.labels(task.name, 'failed', task.exchange).inc()
+        else:
+            logging.debug('Could not track a failed task')
+            task_completions.labels('unknown', 'failed', 'unknown').inc()
 
     @task_handler
     def handle_retried_task(event, task):
-        task_runtime_seconds.labels(task.name, 'retried', task.exchange).observe(task.runtime)
+        if task is not None:
+            logging.debug('Retried a task: %s %s %s', task.name, task.exchange, task.runtime)
+            task_runtime_seconds.labels(task.name, 'retried', task.exchange).observe(task.runtime)
+            task_completions.labels(task.name, 'retried', task.exchange).inc()
+        else:
+            logging.debug('Could not track a retried task')
+            task_completions.labels('unknown', 'retried', 'unknown').inc()
 
     try_interval = 1
     while True:
@@ -191,16 +234,18 @@ def celery_monitor(app):
 
 def run():
     args = parser.parse_args()
+    if args.tz:
+        os.environ['TZ'] = args.tz
+        time.tzset()
 
-    app = Celery()
-    app.config_from_object(args.config)
+    app = Celery(broker=args.broker)
 
-    setup_metrics(app)
+    setup_metrics(app, monitor_memory=args.monitor_memory, queues=args.queues)
 
     start_http_server(args.port, args.host)
 
     if queue_length is not None:
-        Thread(target=check_queue_lengths, args=(app,)).start()
+        Thread(target=check_queue_lengths, args=(app, args.queues)).start()
 
     if queue_rss is not None:
         Thread(target=check_queue_rss).start()

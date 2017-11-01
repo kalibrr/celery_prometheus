@@ -14,13 +14,13 @@ README = open(os.path.join(here, 'README.md')).read()
 
 requires = [
     'celery>=3,<4',
-    'prometheus_client',
-    'cherrypy>=10.1.1',
-    'six>=1.7.3'
-    ]
+    'prometheus_client>=0.0.21,<0.1',
+    'six>=1.7.3',
+    'psutil'
+]
 
 setup(name='celery_prometheus',
-      version='0.1.0',
+      version='0.2.0',
       description='Exports Celery metrics to Prometheus',
       long_description=README,
       classifiers=[
@@ -29,7 +29,7 @@ setup(name='celery_prometheus',
       author='Tim Dumol',
       author_email='tim@kalibrr.com',
       url='',
-      keywords='celery statsd',
+      keywords='celery prometheus',
       packages=find_packages(),
       install_requires=requires,
       entry_points={
