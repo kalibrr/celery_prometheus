@@ -4,10 +4,10 @@ RUN groupadd -r celery --gid=999 && useradd -r -g celery --uid=999 celery
 
 WORKDIR /app
 
-COPY --chown=celery requirements.txt .
+COPY requirements.txt .
 RUN pip install -r requirements.txt --no-cache-dir
 
-COPY --chown=celery . .
+COPY . .
 RUN pip install -e .
 
 USER celery
