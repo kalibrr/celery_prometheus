@@ -25,6 +25,7 @@ from prometheus_client import (
 
 parser = argparse.ArgumentParser(description='Listens to Celery events and exports them to Prometheus')
 
+
 parser.add_argument(
     '--host',
     dest='host',
@@ -120,9 +121,10 @@ def setup_metrics(app, monitor_memory=False, queues=None):
 
 
 def check_queue_lengths(app, queues):
+    client = app.broker_connection().channel().client
     while True:
         logging.error('Setting queue lengths for %s' % queues)
-        pipe = app.broker_connection().channel().client.pipeline(transaction=False)
+        pipe = client.pipeline(transaction=False)
         for queue in queues:
             pipe.llen(queue)
         for result, queue in zip(pipe.execute(), queues):

@@ -20,7 +20,7 @@ requires = [
 ]
 
 setup(name='celery_prometheus',
-      version='0.2.0',
+      version='0.2.1',
       description='Exports Celery metrics to Prometheus',
       long_description=README,
       classifiers=[
