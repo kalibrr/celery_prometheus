@@ -5,6 +5,9 @@ from __future__ import absolute_import
 from __future__ import unicode_literals
 from __future__ import division
 
+import gevent.monkey
+monkey.patch_all()
+
 import argparse
 import os
 from functools import wraps

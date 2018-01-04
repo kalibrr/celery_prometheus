@@ -16,7 +16,8 @@ requires = [
     'celery>=3,<4',
     'prometheus_client>=0.0.21,<0.1',
     'six>=1.7.3',
-    'psutil'
+    'psutil',
+    'gevent>=1.2.2'
 ]
 
 setup(name='celery_prometheus',
